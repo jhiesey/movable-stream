@@ -1,0 +1,33 @@
+{
+  "name": "movable-stream",
+  "version": "0.0.1",
+  "description": "Move a stream between underlying streams, transparently",
+  "main": "index.js",
+  "scripts": {
+    "test": "( [ -e test-data ] || head -c 100000000 /dev/urandom > test-data ) && node test.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+ssh://git@github.com/jhiesey/movable-stream.git"
+  },
+  "keywords": [
+    "stream",
+    "movable",
+    "switchable"
+  ],
+  "author": "John Hiesey",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/jhiesey/movable-stream/issues"
+  },
+  "homepage": "https://github.com/jhiesey/movable-stream#readme",
+  "dependencies": {
+    "duplexify": "^3.4.2",
+    "inherits": "^2.0.1",
+    "pump": "^2.0.0",
+    "through2": "^2.0.0"
+  },
+  "devDependencies": {
+    "ashify": "^1.0.1"
+  }
+}
