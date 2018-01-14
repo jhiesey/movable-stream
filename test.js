@@ -3,7 +3,7 @@ const fs = require('fs')
 const net = require('net')
 const path = require('path')
 
-const SwitchableStream = require('./index')
+const MovableStream = require('./index')
 
 let server1, server2, client1, client2
 
@@ -55,8 +55,8 @@ const runTest = function () {
 	const clientServerData = fs.createReadStream(path.join(__dirname, 'test-data'))
 	const refData = fs.createReadStream(path.join(__dirname, 'test-data'))
 
-	const serverEnd = new SwitchableStream(server1)
-	const clientEnd = new SwitchableStream(client1)
+	const serverEnd = new MovableStream(server1)
+	const clientEnd = new MovableStream(client1)
 
 	serverClientData.pipe(serverEnd)
 	clientServerData.pipe(clientEnd)
@@ -91,19 +91,21 @@ const runTest = function () {
 		}
 	})
 
-	serverEnd.on('switched', function () {
-		console.log('server switched')
+	serverEnd.on('moved', function () {
+		console.log('server end moved')
 		server1.destroy()
 	})
-	clientEnd.on('switched', function () {
-		console.log('client switched')
+	clientEnd.on('moved', function () {
+		console.log('client end moved')
 		client1.destroy()
 	})
 
 	setTimeout(function () {
-		serverEnd.replace(server2)
+		console.log('moving client end')
+		clientEnd.moveto(client2)
 		setTimeout(function () {
-			clientEnd.replace(client2)
+			console.log('moving server end')
+			serverEnd.moveto(server2)
 		}, 100)
 	}, 100)
 

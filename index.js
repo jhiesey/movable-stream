@@ -1,59 +1,52 @@
-/*
-Basic idea:
-Pass message indicating channel is open
-Once a side has gotten its own call and notification from the other side, start sending data on the new channel
-Add sequence numbers and framing
+const duplexify = require('duplexify')
+const inherits = require('inherits')
+const pump = require('pump')
+const through2 = require('through2')
 
+const DATA_BLOCK = 0
+const REPLACE_WRITE = 1
+const REPLACE_READ = 2
 
-
-*/
-
-var duplexify = require('duplexify')
-var inherits = require('inherits')
-var pump = require('pump')
-var through2 = require('through2')
-
-
-var SwitchableStream = module.exports = function (initialStream) {
-	var self = this
+const MovableStream = module.exports = function (initialStream) {
+	const self = this
 	duplexify.call(self)
 
 	self._inBuffer = null
 
 	if (initialStream)
-		self.replace(initialStream)
+		self.moveto(initialStream)
 }
 
-inherits(SwitchableStream, duplexify)
+inherits(MovableStream, duplexify)
 
-SwitchableStream.prototype.replace = function (newStream) {
-	var self = this
+MovableStream.prototype.moveto = function (newStream) {
+	const self = this
 
-	self._switchingTo = newStream
+	self._movingTo = newStream
 
 	if (!self._out) {
-		self._switchWrite()
-		self._switchRead()
+		self._moveWrite()
+		self._moveRead()
 		return
 	}
 
 	// send replaceWrite
-	var header = new Buffer(1)
-	header.writeUInt8(1)
+	const header = new Buffer(1)
+	header.writeUInt8(REPLACE_WRITE)
 	self._out.push(header)
 
 	if (self._gotReplaceWrite)
-		self._switchWrite()
+		self._moveWrite()
 }
 
-SwitchableStream.prototype._switchWrite = function () {
-	var self = this
+MovableStream.prototype._moveWrite = function () {
+	const self = this
 
-	// if actually switching
+	// if actually moving
 	if (self._out) {
 		// send replaceRead
-		var header = new Buffer(1)
-		header.writeUInt8(2)
+		const header = new Buffer(1)
+		header.writeUInt8(REPLACE_READ)
 		self._out.push(header)
 	}
 
@@ -62,43 +55,43 @@ SwitchableStream.prototype._switchWrite = function () {
 		self._outFilter(this, chunk, enc, cb)
 	})
 
-	self._switchedDuplex = duplexify()
-	self._switchedDuplex.setReadable(self._out)
-	var currWritable = self._switchingTo
-	pump(self._switchedDuplex, self._switchingTo, self._switchedDuplex, function (err) {
+	self._movedDuplex = duplexify()
+	self._movedDuplex.setReadable(self._out)
+	const currWritable = self._movingTo
+	pump(self._movedDuplex, self._movingTo, self._movedDuplex, function (err) {
 		if (currWritable === self._currWritable)
 			self.destroy(err)
 	})
 
 	// console.log('changing to new stream')
 	self.setWritable(self._out)
-	self._currWritable = self._switchingTo
+	self._currWritable = self._movingTo
 
 	self._gotReplaceWrite = false
-	self._switchingTo = null
+	self._movingTo = null
 }
 
-SwitchableStream.prototype._switchRead = function () {
-	var self = this
-	var actuallySwitching = !!self._in
+MovableStream.prototype._moveRead = function () {
+	const self = this
+	const actuallyMoving = !!self._in
 	self._in = through2(function (chunk, enc, cb) {
 		self._inFilter(this, chunk, enc, cb)
 	})
 
-	self._switchedDuplex.setWritable(self._in)
+	self._movedDuplex.setWritable(self._in)
 	self.setReadable(self._in)
 
-	if (actuallySwitching) {
-		self.emit('switched')
+	if (actuallyMoving) {
+		self.emit('moved')
 	}
 }
 
-SwitchableStream.prototype._outFilter = function (stream, chunk, enc, cb) {
-	var self = this
+MovableStream.prototype._outFilter = function (stream, chunk, enc, cb) {
+	const self = this
 
 	// Add 5 bytes
-	var header = new Buffer(5)
-	header.writeUInt8(0, 0)
+	const header = new Buffer(5)
+	header.writeUInt8(0, DATA_BLOCK)
 	header.writeUInt32BE(chunk.length, 1)
 	stream.push(header)
 	stream.push(chunk)
@@ -106,10 +99,10 @@ SwitchableStream.prototype._outFilter = function (stream, chunk, enc, cb) {
 	cb()
 }
 
-SwitchableStream.prototype._inFilter = function (stream, chunk, enc, cb) {
-	var self = this
+MovableStream.prototype._inFilter = function (stream, chunk, enc, cb) {
+	const self = this
 
-	var buf
+	let buf
 	if (self._inData)
 		buf = Buffer.concat([self._inData, chunk])
 	else
@@ -124,14 +117,14 @@ SwitchableStream.prototype._inFilter = function (stream, chunk, enc, cb) {
 			return
 		}
 
-		var msgType = buf.readUInt8(0)
+		const msgType = buf.readUInt8(0)
 		switch(msgType) {
-			case 0:
+			case DATA_BLOCK:
 				if (buf.length < 5) {
 					cb()
 					return
 				}
-				var len = buf.readUInt32BE(1)
+				const len = buf.readUInt32BE(1)
 				if (buf.length < len + 5) {
 					cb()
 					return
@@ -140,15 +133,15 @@ SwitchableStream.prototype._inFilter = function (stream, chunk, enc, cb) {
 				buf = buf.slice(len + 5)
 				break
 
-			case 1:
+			case REPLACE_WRITE:
 				buf = buf.slice(1)
 				self._gotReplaceWrite = true
-				if (self._switchingTo)
-					self._switchWrite()
+				if (self._movingTo)
+					self._moveWrite()
 				break
 
-			case 2:
-				self._switchRead()
+			case REPLACE_READ:
+				self._moveRead()
 				// This should always be the last data on this stream
 				self._inData = null
 				cb()

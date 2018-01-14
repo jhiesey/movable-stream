@@ -2,9 +2,9 @@
 
 ## What?
 
-This module is a duplex stream, like a regular socket, which wraps some, other *underlying* duplex stream. You use one instance at each end of the stream, and it allows you to *replace* the underlying stream, while data is flowing, without the code using the movable stream noticing that anything changed.
+This module is a duplex stream, like a regular socket, which wraps some, other *underlying* duplex stream. You use one instance to wrap each end of the underlying stream, and it allows you to *replace* the underlying stream, while data is flowing, without the code using the movable stream noticing that anything changed.
 
-It switches streams,... midstream.
+It switches streams... midstream.
 
 ## Why?
 
@@ -14,7 +14,7 @@ Instead of waiting for the connection to open before sending data, you can set u
 
 ## Example
 
-```
+``` js
 let Movable = require('movable-stream')
 
 let originalStream = ... // whatever stream you want wrap initially (e.g. over websockets)
@@ -30,7 +30,7 @@ ms.write('hello, world!')
 
 let newStream = ... // a replacement for originalStream (e.g. WebRTC data channel stream)
 
-ms.on('switched', () => {
+ms.on('moved', () => {
 	originalStream.destroy() // original stream is no longer needed
 })
 ms.replace(newStream) // data starts flowing over newStream instead of originalStream, transparently
