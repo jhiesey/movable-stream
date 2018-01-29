@@ -32,7 +32,7 @@ MovableStream.prototype.moveto = function (newStream) {
 
 	// send replaceWrite
 	const header = new Buffer(1)
-	header.writeUInt8(REPLACE_WRITE)
+	header.writeUInt8(REPLACE_WRITE, 0)
 	self._out.push(header)
 
 	if (self._gotReplaceWrite)
@@ -45,8 +45,9 @@ MovableStream.prototype._moveWrite = function () {
 	// if actually moving
 	if (self._out) {
 		// send replaceRead
+		console.log('SENDING REPLACE_READ')
 		const header = new Buffer(1)
-		header.writeUInt8(REPLACE_READ)
+		header.writeUInt8(REPLACE_READ, 0)
 		self._out.push(header)
 	}
 
@@ -68,6 +69,7 @@ MovableStream.prototype._moveWrite = function () {
 	self._currWritable = self._movingTo
 
 	self._gotReplaceWrite = false
+	self.underlying = self._movingTo
 	self._movingTo = null
 }
 
@@ -82,6 +84,7 @@ MovableStream.prototype._moveRead = function () {
 	self.setReadable(self._in)
 
 	if (actuallyMoving) {
+		console.log('BLAH')
 		self.emit('moved')
 	}
 }
@@ -91,10 +94,12 @@ MovableStream.prototype._outFilter = function (stream, chunk, enc, cb) {
 
 	// Add 5 bytes
 	const header = new Buffer(5)
-	header.writeUInt8(0, DATA_BLOCK)
+	header.writeUInt8(DATA_BLOCK, 0)
 	header.writeUInt32BE(chunk.length, 1)
 	stream.push(header)
 	stream.push(chunk)
+	console.log('SENDING', header)
+	console.log('SENDING', chunk)
 
 	cb()
 }
@@ -102,52 +107,81 @@ MovableStream.prototype._outFilter = function (stream, chunk, enc, cb) {
 MovableStream.prototype._inFilter = function (stream, chunk, enc, cb) {
 	const self = this
 
-	let buf
+	let runno = Math.random()
+
+	self._foobar = self._foobar || Math.random()
+
+	console.log(runno, 'RECEIVING', chunk, self._foobar)
+
+	// let origcb = cb
+	// cb = function (arg) {
+	// 	process.nextTick(function () {
+	// 		origcb(arg)
+	// 	})
+	// }
+
+	console.log(runno, 'IN DATA:', self._inData, self._foobar)
+
 	if (self._inData)
-		buf = Buffer.concat([self._inData, chunk])
+		self._inData = Buffer.concat([self._inData, chunk])
 	else
-		buf = chunk
+		self._inData = chunk
+
+	console.log(runno, 'FULL BUF', self._inData)
 
 	while (true) {
-		if (buf.length) {
-			self._inData = buf
-		} else {
+		console.log(runno, 'tol')
+		if (!self._inData || !self._inData.length) {
 			self._inData = null
+			console.log(runno, 'CLEARED IN DATA 1')
 			cb()
 			return
 		}
 
-		const msgType = buf.readUInt8(0)
+		const msgType = self._inData.readUInt8(0)
+		console.log(runno, 'MSG TYPE:', msgType)
 		switch(msgType) {
 			case DATA_BLOCK:
-				if (buf.length < 5) {
+				if (self._inData.length < 5) {
+					console.log(runno, 'SHORT RETURN 1')
 					cb()
 					return
 				}
-				const len = buf.readUInt32BE(1)
-				if (buf.length < len + 5) {
+				const len = self._inData.readUInt32BE(1)
+				if (self._inData.length < len + 5) {
+					console.log(runno, 'SHORT RETURN 2', self._inData, self._foobar)
 					cb()
 					return
 				}
-				stream.push(buf.slice(5, len + 5))
-				buf = buf.slice(len + 5)
+				let chunk = self._inData.slice(5, len + 5)
+				console.log('RECEIVING', chunk)
+				self._inData = self._inData.slice(len + 5)
+				stream.push(chunk)
 				break
 
 			case REPLACE_WRITE:
-				buf = buf.slice(1)
+				self._inData = self._inData.slice(1)
 				self._gotReplaceWrite = true
 				if (self._movingTo)
 					self._moveWrite()
 				break
 
 			case REPLACE_READ:
-				self._moveRead()
+				console.log('GOT REPLACE_READ')
+				self._inData = self._inData.slice(1)
 				// This should always be the last data on this stream
-				self._inData = null
+				if (self._inData.length !== 0)
+					console.error('BADBADBADBADBADBADBADBADBAD****************************************')
+				// console.log(runno, 'CLEARED IN DATA 2')
+				self._moveRead()
 				cb()
 				return
+
 			default:
+				self._inData = null
+				console.log(runno, 'CLEARED IN DATA 3')
 				cb(new Error('Unexpected message type:', msgType))
+				return
 		}
 	}
 }
