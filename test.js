@@ -1,7 +1,10 @@
 const ashify = require('ashify')
-const fs = require('fs')
-const net = require('net')
+const file = require('pull-file')
+const createServer = require('pull-net/server')
+const connect  = require('pull-net/client')
 const path = require('path')
+const pull = require('pull-stream')
+const toStream = require('pull-stream-to-stream')
 
 const MovableStream = require('./index')
 
@@ -9,28 +12,29 @@ let server1, server2, client1, client2
 
 let toCreate = 4
 
-let s1 = net.createServer(function (serverConn) {
+let s1 = createServer(function (serverConn) {
 	server1 = serverConn
 	if (--toCreate === 0)
 		runTest()
 })
-let s2 = net.createServer(function (serverConn) {
+s1.listen(9998, '127.0.0.1')
+
+let s2 = createServer(function (serverConn) {
 	server2 = serverConn
 	if (--toCreate === 0)
 		runTest()
 })
+s2.listen(9999, '127.0.0.1')
 
-client1 = net.createConnection(9998, function () {
+client1 = connect(9998, '127.0.0.1', function () {
 	if (--toCreate === 0)
 		runTest()
 })
-client2 = net.createConnection(9999, function () {
+client2 = connect(9999, '127.0.0.1', function () {
 	if (--toCreate === 0)
 		runTest()
 })
 
-s1.listen(9998)
-s2.listen(9999)
 
 let hashesExpected = 3
 let computedHash = null
@@ -51,20 +55,21 @@ const verify = function (hash) {
 }
 
 const runTest = function () {
-	const serverClientData = fs.createReadStream(path.join(__dirname, 'test-data'))
-	const clientServerData = fs.createReadStream(path.join(__dirname, 'test-data'))
-	const refData = fs.createReadStream(path.join(__dirname, 'test-data'))
+	const serverClientData = file(path.join(__dirname, 'test-data'))
+	const clientServerData = file(path.join(__dirname, 'test-data'))
+	const refData = file(path.join(__dirname, 'test-data'))
 
 	const serverEnd = new MovableStream(server1)
 	const clientEnd = new MovableStream(client1)
 
-	serverClientData.pipe(serverEnd)
-	clientServerData.pipe(clientEnd)
+	pull(serverClientData, serverEnd)
+	pull(clientServerData, clientEnd)
+
 	const ashifyOpts = {
 		algorithm: 'sha256',
 		encoding: 'hex'
 	}
-	ashify(refData, ashifyOpts, function (err, data) {
+	ashify(toStream.source(refData), ashifyOpts, function (err, data) {
 		if (err)
 			console.error(err)
 		else {
@@ -73,7 +78,7 @@ const runTest = function () {
 		}
 	})
 
-	ashify(clientEnd, ashifyOpts, function (err, data) {
+	ashify(toStream.source(clientEnd.source), ashifyOpts, function (err, data) {
 		if (err)
 			console.error(err)
 		else {
@@ -82,7 +87,7 @@ const runTest = function () {
 		}
 	})
 
-	ashify(serverEnd, ashifyOpts, function (err, data) {
+	ashify(toStream.source(serverEnd.source), ashifyOpts, function (err, data) {
 		if (err)
 			console.error(err)
 		else {
@@ -93,11 +98,9 @@ const runTest = function () {
 
 	serverEnd.on('moved', function () {
 		console.log('server end moved')
-		server1.destroy()
 	})
 	clientEnd.on('moved', function () {
 		console.log('client end moved')
-		client1.destroy()
 	})
 
 	setTimeout(function () {
@@ -108,6 +111,5 @@ const runTest = function () {
 			serverEnd.moveto(server2)
 		}, 100)
 	}, 100)
-
 }
 

@@ -1,187 +1,189 @@
-const duplexify = require('duplexify')
 const inherits = require('inherits')
-const pump = require('pump')
-const through2 = require('through2')
+const EventEmitter = require('events')
+const pull = require('pull-stream')
+const pullDefer = require('pull-defer')
 
 const DATA_BLOCK = 0
 const REPLACE_WRITE = 1
 const REPLACE_READ = 2
 
 const MovableStream = module.exports = function (initialStream) {
-	const self = this
-	duplexify.call(self)
+	if (!(this instanceof MovableStream)) return new MovableStream(initialStream)
+	let self = this
 
+	self.underlyingSource = null
+	self.underlyingSink = null
 	self._inBuffer = null
+	self._newStream = null
+	self._sinkResolved = false
+	self._gotReplaceWrite = false
+	self._replaceWriteCalled = false
+
+	self.source = pullDefer.source()
+	self._sinkRead = pullDefer.source()
+	self.sink = function (read) {
+		self._sinkRead.resolve(read)
+	}
 
 	if (initialStream)
 		self.moveto(initialStream)
 }
 
-inherits(MovableStream, duplexify)
+inherits(MovableStream, EventEmitter)
 
 MovableStream.prototype.moveto = function (newStream) {
-	const self = this
+	let self = this
 
-	self._movingTo = newStream
+	// queue up calls if move in progress
+	if (self._newStream)
+		return self.once('moved', self.moveto.bind(self, newStream))
 
-	if (!self._out) {
-		self._moveWrite()
-		self._moveRead()
-		return
+	self._newStream = newStream
+	if (self.underlyingSink) {
+		// actually moving
+		let msg = new Buffer(1)
+		msg[0] = REPLACE_WRITE
+		self._queue(msg)
+		if (self._gotReplaceWrite)
+			self._replaceWrite()
+	} else {
+		self.underlyingSource = newStream
+		self._start()
+		self._newStream = null
 	}
-
-	// send replaceWrite
-	const header = new Buffer(1)
-	header.writeUInt8(REPLACE_WRITE, 0)
-	self._out.push(header)
-
-	if (self._gotReplaceWrite)
-		self._moveWrite()
 }
 
-MovableStream.prototype._moveWrite = function () {
-	const self = this
+MovableStream.prototype._start = function () {
+	let self = this
+	// called whenever data wanted from the wire
+	self.source.resolve(function (end, cb) {
+		if (end) {
+			return self.underlyingSource.source(end)
+		}
 
-	// if actually moving
-	if (self._out) {
-		// send replaceRead
-		console.log('SENDING REPLACE_READ')
-		const header = new Buffer(1)
-		header.writeUInt8(REPLACE_READ, 0)
-		self._out.push(header)
+		const bufferData = function (end, data) {
+			if (end)
+				return cb(end)
+
+			if (self._inBuffer)
+				self._inBuffer = Buffer.concat([self._inBuffer, data])
+			else
+				self._inBuffer = data
+			haveData()
+		}
+
+		const haveData = function () {
+			while (true) {
+				const msgType = self._inBuffer[0]
+				switch(msgType) {
+					case DATA_BLOCK:
+						if (self._inBuffer.length < 5)
+							return self.underlyingSource.source(null, bufferData)
+						const len = self._inBuffer.readUInt32BE(1)
+						if (self._inBuffer.length < len + 5)
+							return self.underlyingSource.source(null, bufferData)
+
+						const chunk = self._inBuffer.slice(5, len + 5)
+						if (self._inBuffer.length === len + 5)
+							self._inBuffer = null
+						else
+							self._inBuffer = self._inBuffer.slice(len + 5)
+						return cb(null, chunk)
+					case REPLACE_WRITE:
+						self._gotReplaceWrite = true
+						self._inBuffer = self._inBuffer.slice(1)
+						if (self._newStream)
+							self._replaceWrite()
+						break
+					case REPLACE_READ:
+						self._inBuffer = self._inBuffer.slice(1)
+						if (self._inBuffer.length)
+							throw new Error('unexpected data after REPLACE_READ')
+						self._replaceRead()
+						break
+					default:
+						throw new Error('unexpected byte in MovableStream')
+				}
+
+				if (self._inBuffer.length === 0) {
+					self._inBuffer = null
+					return self.underlyingSource.source(null, bufferData)
+				}
+			}
+		}
+
+		if (!self._inBuffer)
+			self.underlyingSource.source(null, bufferData)
+		else
+			haveData()
+	})
+
+	self._replaceWrite()
+}
+
+MovableStream.prototype._replaceWrite = function () {
+	let self = this
+
+	// we don't want to actually replace the underlyingSink
+	// until all data has been sent to the old underlyingSink
+	let actuallyReplaceWrite = function () {
+		// called when underlyingSink wants data
+		self.underlyingSink.sink(function (end, cb) {
+			if (end) {
+				return self._sinkRead(end)
+			}
+
+			if (self._extraMessage) {
+				let message = self._extraMessage
+				self._extraMessage = null
+				return cb(null, message)
+			}
+
+			if (self._replaceWriteCalled) {
+				self._replaceWriteCalled = false
+				cb(true)
+				return actuallyReplaceWrite()
+			}
+
+			self._sinkRead(null, function (end, data) {
+				if (end) return cb(end)
+
+				let header = new Buffer(5)
+				header[0] = DATA_BLOCK
+				header.writeUInt32BE(data.length, 1)
+
+				cb(null, Buffer.concat([header, data]))
+			})
+		})
 	}
 
-	self._out = through2(function (chunk, enc, cb) {
-		// console.log('pushing')
-		self._outFilter(this, chunk, enc, cb)
-	})
-
-	self._movedDuplex = duplexify()
-	self._movedDuplex.setReadable(self._out)
-	const currWritable = self._movingTo
-	pump(self._movedDuplex, self._movingTo, self._movedDuplex, function (err) {
-		if (currWritable === self._currWritable)
-			self.destroy(err)
-	})
-
-	// console.log('changing to new stream')
-	self.setWritable(self._out)
-	self._currWritable = self._movingTo
+	if (self.underlyingSink) {
+		self.underlyingSink = self._newStream
+		self._replaceWriteCalled = true
+		let msg = new Buffer(1)
+		msg[0] = REPLACE_READ
+		self._queue(msg)
+	} else {
+		self.underlyingSink = self._newStream
+		actuallyReplaceWrite()
+	}
 
 	self._gotReplaceWrite = false
-	self.underlying = self._movingTo
-	self._movingTo = null
 }
 
-MovableStream.prototype._moveRead = function () {
-	const self = this
-	const actuallyMoving = !!self._in
-	self._in = through2(function (chunk, enc, cb) {
-		self._inFilter(this, chunk, enc, cb)
-	})
+MovableStream.prototype._replaceRead = function () {
+	let self = this
 
-	self._movedDuplex.setWritable(self._in)
-	self.setReadable(self._in)
-
-	if (actuallyMoving) {
-		console.log('BLAH')
-		self.emit('moved')
-	}
+	self.underlyingSource = self._newStream
+	self._newStream = null
+	self.emit('moved', self.underlyingSource)
 }
 
-MovableStream.prototype._outFilter = function (stream, chunk, enc, cb) {
-	const self = this
+MovableStream.prototype._queue = function (buffer) {
+	let self = this
 
-	// Add 5 bytes
-	const header = new Buffer(5)
-	header.writeUInt8(DATA_BLOCK, 0)
-	header.writeUInt32BE(chunk.length, 1)
-	stream.push(header)
-	stream.push(chunk)
-	console.log('SENDING', header)
-	console.log('SENDING', chunk)
-
-	cb()
-}
-
-MovableStream.prototype._inFilter = function (stream, chunk, enc, cb) {
-	const self = this
-
-	let runno = Math.random()
-
-	self._foobar = self._foobar || Math.random()
-
-	console.log(runno, 'RECEIVING', chunk, self._foobar)
-
-	// let origcb = cb
-	// cb = function (arg) {
-	// 	process.nextTick(function () {
-	// 		origcb(arg)
-	// 	})
-	// }
-
-	console.log(runno, 'IN DATA:', self._inData, self._foobar)
-
-	if (self._inData)
-		self._inData = Buffer.concat([self._inData, chunk])
+	if (self._extraMessage)
+		self._extraMessage = Buffer.concat([self._extraMessage, buffer])
 	else
-		self._inData = chunk
-
-	console.log(runno, 'FULL BUF', self._inData)
-
-	while (true) {
-		console.log(runno, 'tol')
-		if (!self._inData || !self._inData.length) {
-			self._inData = null
-			console.log(runno, 'CLEARED IN DATA 1')
-			cb()
-			return
-		}
-
-		const msgType = self._inData.readUInt8(0)
-		console.log(runno, 'MSG TYPE:', msgType)
-		switch(msgType) {
-			case DATA_BLOCK:
-				if (self._inData.length < 5) {
-					console.log(runno, 'SHORT RETURN 1')
-					cb()
-					return
-				}
-				const len = self._inData.readUInt32BE(1)
-				if (self._inData.length < len + 5) {
-					console.log(runno, 'SHORT RETURN 2', self._inData, self._foobar)
-					cb()
-					return
-				}
-				let chunk = self._inData.slice(5, len + 5)
-				console.log('RECEIVING', chunk)
-				self._inData = self._inData.slice(len + 5)
-				stream.push(chunk)
-				break
-
-			case REPLACE_WRITE:
-				self._inData = self._inData.slice(1)
-				self._gotReplaceWrite = true
-				if (self._movingTo)
-					self._moveWrite()
-				break
-
-			case REPLACE_READ:
-				console.log('GOT REPLACE_READ')
-				self._inData = self._inData.slice(1)
-				// This should always be the last data on this stream
-				if (self._inData.length !== 0)
-					console.error('BADBADBADBADBADBADBADBADBAD****************************************')
-				// console.log(runno, 'CLEARED IN DATA 2')
-				self._moveRead()
-				cb()
-				return
-
-			default:
-				self._inData = null
-				console.log(runno, 'CLEARED IN DATA 3')
-				cb(new Error('Unexpected message type:', msgType))
-				return
-		}
-	}
+		self._extraMessage = buffer
 }
