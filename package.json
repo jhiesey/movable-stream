@@ -22,13 +22,10 @@
   },
   "homepage": "https://github.com/jhiesey/movable-stream#readme",
   "dependencies": {
-    "duplexify": "^3.4.2",
     "inherits": "^2.0.1",
     "pull-concat": "^1.1.1",
     "pull-defer": "^0.2.2",
-    "pull-stream": "^3.6.1",
-    "pump": "^2.0.0",
-    "through2": "^2.0.0"
+    "pull-stream": "^3.6.1"
   },
   "devDependencies": {
     "ashify": "^1.0.1",
