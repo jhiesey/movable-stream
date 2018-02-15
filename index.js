@@ -11,12 +11,16 @@ const MovableStream = module.exports = function (initialStream) {
 	if (!(this instanceof MovableStream)) return new MovableStream(initialStream)
 	let self = this
 
+	self._foobarbaz = 0
+
 	self.underlyingSource = null
 	self.underlyingSink = null
 	self._inBuffer = null
 	self._newStream = null
 	self._sinkResolved = false
 	self._gotReplaceWrite = false
+	self._outBuffer = null
+	self._outEnd = null
 	self._replaceWriteCalled = false
 
 	self.source = pullDefer.source()
@@ -43,7 +47,7 @@ MovableStream.prototype.moveto = function (newStream) {
 		// actually moving
 		let msg = new Buffer(1)
 		msg[0] = REPLACE_WRITE
-		self._queue(msg)
+		self._queueOut(null, msg)
 		if (self._gotReplaceWrite)
 			self._replaceWrite()
 	} else {
@@ -58,7 +62,7 @@ MovableStream.prototype._start = function () {
 	// called whenever data wanted from the wire
 	self.source.resolve(function (end, cb) {
 		if (end) {
-			return self.underlyingSource.source(end)
+			return self.underlyingSource.source(end, cb)
 		}
 
 		const bufferData = function (end, data) {
@@ -90,12 +94,14 @@ MovableStream.prototype._start = function () {
 							self._inBuffer = self._inBuffer.slice(len + 5)
 						return cb(null, chunk)
 					case REPLACE_WRITE:
+						console.log('GOT REPLACE_WRITE')
 						self._gotReplaceWrite = true
 						self._inBuffer = self._inBuffer.slice(1)
 						if (self._newStream)
 							self._replaceWrite()
 						break
 					case REPLACE_READ:
+						console.log('GOT REPLACE_READ')
 						self._inBuffer = self._inBuffer.slice(1)
 						if (self._inBuffer.length)
 							throw new Error('unexpected data after REPLACE_READ')
@@ -124,51 +130,41 @@ MovableStream.prototype._start = function () {
 MovableStream.prototype._replaceWrite = function () {
 	let self = this
 
-	// we don't want to actually replace the underlyingSink
-	// until all data has been sent to the old underlyingSink
-	let actuallyReplaceWrite = function () {
-		// called when underlyingSink wants data
-		self.underlyingSink.sink(function (end, cb) {
-			if (end) {
-				return self._sinkRead(end)
-			}
-
-			if (self._extraMessage) {
-				let message = self._extraMessage
-				self._extraMessage = null
-				return cb(null, message)
-			}
-
-			if (self._replaceWriteCalled) {
-				self._replaceWriteCalled = false
-				cb(true)
-				return actuallyReplaceWrite()
-			}
-
-			self._sinkRead(null, function (end, data) {
-				if (end) return cb(end)
-
-				let header = new Buffer(5)
-				header[0] = DATA_BLOCK
-				header.writeUInt32BE(data.length, 1)
-
-				cb(null, Buffer.concat([header, data]))
-			})
-		})
-	}
-
 	if (self.underlyingSink) {
 		self.underlyingSink = self._newStream
 		self._replaceWriteCalled = true
 		let msg = new Buffer(1)
 		msg[0] = REPLACE_READ
-		self._queue(msg)
+		self._queueOut(null, msg)
+		self._queueOut(true)
 	} else {
 		self.underlyingSink = self._newStream
-		actuallyReplaceWrite()
+		self._actuallyReplaceWrite()
 	}
 
 	self._gotReplaceWrite = false
+}
+
+MovableStream.prototype._actuallyReplaceWrite = function () {
+	let self = this
+	// we don't want to actually replace the underlyingSink
+	// until all data has been sent to the old underlyingSink
+	self.underlyingSink.sink(function (end, cb) {
+		// called when data needed to go out
+		if (end) {
+			return // TODO: more to this?
+			// yes. actually end if nothing is being replaced
+		}
+
+		// if we have something to send, send it
+		if (self._outBuffer || self._outEnd) {
+			return self._pushOut(cb)
+		}
+
+		// otherwise try to pull more data in
+		self._outCb = cb
+		self._requestOutData()
+	})
 }
 
 MovableStream.prototype._replaceRead = function () {
@@ -179,11 +175,62 @@ MovableStream.prototype._replaceRead = function () {
 	self.emit('moved', self.underlyingSource)
 }
 
-MovableStream.prototype._queue = function (buffer) {
+MovableStream.prototype._requestOutData = function () {
 	let self = this
 
-	if (self._extraMessage)
-		self._extraMessage = Buffer.concat([self._extraMessage, buffer])
-	else
-		self._extraMessage = buffer
+	if (self._outDataRequested)
+		return
+
+	self._outDataRequested = true
+	self._sinkRead(null, function (end, data) {
+		self._outDataRequested = false
+		if (end) {
+			return self._queueOut(end)
+		}
+
+		let header = new Buffer(5)
+		header[0] = DATA_BLOCK
+		header.writeUInt32BE(data.length, 1)
+
+		self._queueOut(null, Buffer.concat([header, data]))
+	})
+}
+
+MovableStream.prototype._queueOut = function (end, buffer) {
+	let self = this
+
+	if (end) {
+		self._outEnd = end
+	} else { // buffer must be set
+		if (self._outBuffer) {
+			self._outBuffer = Buffer.concat([self._outBuffer, buffer])
+		}
+		else
+			self._outBuffer = buffer
+	}
+
+	if (self._outCb) {
+		const cb = self._outCb
+		self._outCb = null
+		self._pushOut(cb)
+	}
+}
+
+MovableStream.prototype._pushOut = function (cb) {
+	let self = this
+
+	if (self._outBuffer) {
+		const buffer = self._outBuffer
+		self._outBuffer = null
+		return cb(null, buffer)
+	}
+
+	const end = self._outEnd
+	if (!end) throw new Error('bad stream state')
+	self._outEnd = null
+	cb(end)
+	if (self._replaceWriteCalled === true) {
+		self._replaceWriteCalled = false
+		self._actuallyReplaceWrite()
+	}
 }
