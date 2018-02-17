@@ -21,7 +21,8 @@ const MovableStream = module.exports = function (initialStream) {
 	self._gotReplaceWrite = false
 	self._outBuffer = null
 	self._outEnd = null
-	self._replaceWriteCalled = false
+	self._runReplaceWrite = false
+	self._ignoreInEnd = false
 
 	self.source = pullDefer.source()
 	self._sinkRead = pullDefer.source()
@@ -132,7 +133,8 @@ MovableStream.prototype._replaceWrite = function () {
 
 	if (self.underlyingSink) {
 		self.underlyingSink = self._newStream
-		self._replaceWriteCalled = true
+		self._runReplaceWrite = true
+		self._ignoreInEnd = true
 		let msg = new Buffer(1)
 		msg[0] = REPLACE_READ
 		self._queueOut(null, msg)
@@ -152,8 +154,11 @@ MovableStream.prototype._actuallyReplaceWrite = function () {
 	self.underlyingSink.sink(function (end, cb) {
 		// called when data needed to go out
 		if (end) {
-			return // TODO: more to this?
-			// yes. actually end if nothing is being replaced
+			if (self._ignoreInEnd) {
+				self._ignoreInEnd = false
+			} else {
+				self._sinkRead(end, cb)
+			}
 		}
 
 		// if we have something to send, send it
@@ -229,8 +234,8 @@ MovableStream.prototype._pushOut = function (cb) {
 	if (!end) throw new Error('bad stream state')
 	self._outEnd = null
 	cb(end)
-	if (self._replaceWriteCalled === true) {
-		self._replaceWriteCalled = false
+	if (self._runReplaceWrite) {
+		self._runReplaceWrite = false
 		self._actuallyReplaceWrite()
 	}
 }
