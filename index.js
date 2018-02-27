@@ -11,8 +11,6 @@ const MovableStream = module.exports = function (initialStream) {
 	if (!(this instanceof MovableStream)) return new MovableStream(initialStream)
 	let self = this
 
-	self._foobarbaz = 0
-
 	self.underlyingSource = null
 	self.underlyingSink = null
 	self._inBuffer = null
@@ -24,8 +22,8 @@ const MovableStream = module.exports = function (initialStream) {
 	self._runReplaceWrite = false
 	self._ignoreInEnd = false
 
-	self.source = pullDefer.source()
 	self._sinkRead = pullDefer.source()
+	self.source = pullDefer.source()
 	self.sink = function (read) {
 		self._sinkRead.resolve(read)
 	}
@@ -95,14 +93,12 @@ MovableStream.prototype._start = function () {
 							self._inBuffer = self._inBuffer.slice(len + 5)
 						return cb(null, chunk)
 					case REPLACE_WRITE:
-						console.log('GOT REPLACE_WRITE')
 						self._gotReplaceWrite = true
 						self._inBuffer = self._inBuffer.slice(1)
 						if (self._newStream)
 							self._replaceWrite()
 						break
 					case REPLACE_READ:
-						console.log('GOT REPLACE_READ')
 						self._inBuffer = self._inBuffer.slice(1)
 						if (self._inBuffer.length)
 							throw new Error('unexpected data after REPLACE_READ')
