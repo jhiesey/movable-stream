@@ -6,13 +6,70 @@ const connect  = require('pull-net/client')
 const path = require('path')
 const pull = require('pull-stream')
 const toStream = require('pull-stream-to-stream')
+const DuplexPair = require('pull-pair/duplex')
 
 const MovableStream = require('./index')
 
-test('switch midstream', function (t) {
+test('switch midstream with loopback', function (t) {
+	const ashifyOpts = {
+		algorithm: 'sha256',
+		encoding: 'hex'
+	}
+	const refData = file(path.join(__dirname, 'test-data'))
+	ashify(toStream.source(refData), ashifyOpts, function (err, data) {
+		if (err)
+			return t.fail(err)
+		const refHash = data
+
+		let hashesExpected = 2
+		const verify = function (hash) {
+			t.equals(hash, refHash, 'hash correct')
+
+			if (--hashesExpected === 0) {
+				t.end()
+			}
+		}
+
+		let loopback1 = DuplexPair()
+		let loopback2 = DuplexPair()
+
+		const end1 = new MovableStream(loopback1[0])
+		const end2 = new MovableStream(loopback1[1])
+
+		pull(file(path.join(__dirname, 'test-data')), end1)
+		pull(file(path.join(__dirname, 'test-data')), end2)
+
+		;
+		[end1, end2].forEach(function (streamEnd) {
+			ashify(toStream.source(streamEnd.source), ashifyOpts, function (err, data) {
+				console.log('cb')
+				if (err)
+					return t.fail(err)
+				t.equals(data, refHash, 'hash correct')
+
+				if (--hashesExpected === 0)
+					t.end()
+			})
+			streamEnd.on('moved', function () {
+				console.log('end moved')
+			})
+		})
+
+		setTimeout(function () {
+			console.log('moving end1')
+			end1.moveto(loopback2[0])
+			setTimeout(function () {
+				console.log('moving end2')
+				end2.moveto(loopback2[1])
+			}, 100)
+		}, 100)
+	})
+})
+
+test.skip('switch midstream with tcp', function (t) {
 	let server1, server2, client1, client2
 
-	let toCreate = 4
+	let toCreate = 5
 
 	let s1 = createServer(function (serverConn) {
 		server1 = serverConn
@@ -37,70 +94,47 @@ test('switch midstream', function (t) {
 			runTest()
 	})
 
-
-	let hashesExpected = 3
-	let computedHash = null
-	const verify = function (hash) {
-		if (computedHash) {
-			t.equals(computedHash, hash, 'hash correct')
-		} else {
-			computedHash = hash
-		}
-
-		if (--hashesExpected === 0) {
-			s1.close()
-			s2.close()
-			t.end()
-		}
+	const ashifyOpts = {
+		algorithm: 'sha256',
+		encoding: 'hex'
 	}
+	const refData = file(path.join(__dirname, 'test-data'))
+	let refHash = null
+	ashify(toStream.source(refData), ashifyOpts, function (err, data) {
+		if (err)
+			return t.fail(err)
+		
+		refHash = data
+		if (--toCreate === 0)
+			runTest()
+	})
 
 	const runTest = function () {
-		const serverClientData = file(path.join(__dirname, 'test-data'))
-		const clientServerData = file(path.join(__dirname, 'test-data'))
-		const refData = file(path.join(__dirname, 'test-data'))
-
 		const serverEnd = new MovableStream(server1)
 		const clientEnd = new MovableStream(client1)
 
-		pull(serverClientData, serverEnd)
-		pull(clientServerData, clientEnd)
+		pull(file(path.join(__dirname, 'test-data')), serverEnd)
+		pull(file(path.join(__dirname, 'test-data')), clientEnd)
 
-		const ashifyOpts = {
-			algorithm: 'sha256',
-			encoding: 'hex'
-		}
-		ashify(toStream.source(refData), ashifyOpts, function (err, data) {
-			if (err)
-				console.error(err)
-			else {
-				console.log('direct hash:', data)
-				verify(data)
-			}
-		})
+		let hashesExpected = 2
+		;
+		[clientEnd, serverEnd].forEach(function (streamEnd) {		
+			ashify(toStream.source(streamEnd.source), ashifyOpts, function (err, data) {
+				if (err)
+					return t.fail(err)
 
-		ashify(toStream.source(clientEnd.source), ashifyOpts, function (err, data) {
-			if (err)
-				console.error(err)
-			else {
-				console.log('client end received:', data)
-				verify(data)
-			}
-		})
+				t.equals(data, refHash, 'hash correct')
 
-		ashify(toStream.source(serverEnd.source), ashifyOpts, function (err, data) {
-			if (err)
-				console.error(err)
-			else {
-				console.log('server end received:', data)
-				verify(data)
-			}
-		})
+				if (--hashesExpected === 0) {
+					s1.close()
+					s2.close()
+					t.end()
+				}
+			})
 
-		serverEnd.on('moved', function () {
-			console.log('server end moved')
-		})
-		clientEnd.on('moved', function () {
-			console.log('client end moved')
+			streamEnd.on('moved', function () {
+				console.log('end moved')
+			})
 		})
 
 		setTimeout(function () {

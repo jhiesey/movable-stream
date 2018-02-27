@@ -61,12 +61,15 @@ MovableStream.prototype._start = function () {
 	// called whenever data wanted from the wire
 	self.source.resolve(function (end, cb) {
 		if (end) {
+			console.log('source end')
 			return self.underlyingSource.source(end, cb)
 		}
 
 		const bufferData = function (end, data) {
-			if (end)
+			if (end) {
+				console.log('underlyingSource end')
 				return cb(end)
+			}
 
 			if (self._inBuffer)
 				self._inBuffer = Buffer.concat([self._inBuffer, data])
@@ -86,6 +89,7 @@ MovableStream.prototype._start = function () {
 						if (self._inBuffer.length < len + 5)
 							return self.underlyingSource.source(null, bufferData)
 
+						console.log('got data in')
 						const chunk = self._inBuffer.slice(5, len + 5)
 						if (self._inBuffer.length === len + 5)
 							self._inBuffer = null
@@ -150,6 +154,7 @@ MovableStream.prototype._actuallyReplaceWrite = function () {
 	self.underlyingSink.sink(function (end, cb) {
 		// called when data needed to go out
 		if (end) {
+			console.log('underlyingSink end')
 			if (self._ignoreInEnd) {
 				self._ignoreInEnd = false
 			} else {
