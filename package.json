@@ -4,7 +4,8 @@
   "description": "Move a stream between underlying streams, transparently",
   "main": "index.js",
   "scripts": {
-    "test": "( [ -e test-data ] || head -c 100000000 /dev/urandom > test-data ) && node test.js"
+    "test-old": "( [ -e test-data ] || head -c 100000000 /dev/urandom > test-data ) && node test.js",
+    "test": "istanbul cover tape test/*.js"
   },
   "repository": {
     "type": "git",
@@ -29,6 +30,7 @@
   },
   "devDependencies": {
     "ashify": "^1.0.1",
+    "istanbul": "^0.4.5",
     "pull-file": "^1.1.0",
     "pull-net": "^1.0.1",
     "pull-pair": "^1.1.0",
