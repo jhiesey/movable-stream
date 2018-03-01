@@ -8,7 +8,7 @@ const pull = require('pull-stream')
 const toStream = require('pull-stream-to-stream')
 const DuplexPair = require('pull-pair/duplex')
 
-const MovableStream = require('./index')
+const MovableStream = require('../index')
 
 test('switch midstream with loopback', function (t) {
 	const ashifyOpts = {
@@ -21,15 +21,6 @@ test('switch midstream with loopback', function (t) {
 			return t.fail(err)
 		const refHash = data
 
-		let hashesExpected = 2
-		const verify = function (hash) {
-			t.equals(hash, refHash, 'hash correct')
-
-			if (--hashesExpected === 0) {
-				t.end()
-			}
-		}
-
 		let loopback1 = DuplexPair()
 		let loopback2 = DuplexPair()
 
@@ -39,10 +30,11 @@ test('switch midstream with loopback', function (t) {
 		pull(file(path.join(__dirname, 'test-data')), end1)
 		pull(file(path.join(__dirname, 'test-data')), end2)
 
+		let hashesExpected = 2
 		;
 		[end1, end2].forEach(function (streamEnd) {
 			ashify(toStream.source(streamEnd.source), ashifyOpts, function (err, data) {
-				console.log('cb')
+				console.log('end cb')
 				if (err)
 					return t.fail(err)
 				t.equals(data, refHash, 'hash correct')
@@ -66,7 +58,7 @@ test('switch midstream with loopback', function (t) {
 	})
 })
 
-test.skip('switch midstream with tcp', function (t) {
+test('switch midstream with tcp', function (t) {
 	let server1, server2, client1, client2
 
 	let toCreate = 5
@@ -128,6 +120,9 @@ test.skip('switch midstream with tcp', function (t) {
 				if (--hashesExpected === 0) {
 					s1.close()
 					s2.close()
+
+					serverEnd.abort() // TODO: shouldn't be necessary
+					clientEnd.abort()
 					t.end()
 				}
 			})
