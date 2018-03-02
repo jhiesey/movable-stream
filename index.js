@@ -23,18 +23,17 @@ const MovableStream = module.exports = function (initialStream) {
 	self.sink = injector(initialStream.sink)
 	self.source = extractor(initialStream.source, function (buf) {
 		if (buf.length !== 1) {
-			// error
-			throw new Error('fixme')
+			throw new Error('invalid sidechannel message length')
 		}
 
 		switch (buf[0]) {
 			case REPLACE_READ:
 				if (!self._newStream) {
-					// error
-					throw new Error('fixme')
+					throw new Error('unexpected REPLACE_READ message')
 				}
 				let newStream = self._newStream
 				self._newStream = null
+				self.emit('moved', newStream) // TODO: not really quite the right time?
 				return newStream.source
 
 			case REPLACE_WRITE:
@@ -43,8 +42,7 @@ const MovableStream = module.exports = function (initialStream) {
 					self._replaceWrite(self._newStream)
 				return null
 			default:
-				// error
-				throw new Error('fixme')
+				throw new Error('invalid sidechannel message')
 		}
 	})
 
