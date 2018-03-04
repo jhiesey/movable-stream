@@ -143,3 +143,291 @@ test('switch midstream with tcp', function (t) {
 	}
 })
 
+const muxrpc = require('muxrpc')
+
+test('switch with muxrpc', function (t) {
+	let server1, server2, client1, client2
+
+	let toCreate = 4
+
+	let s1 = createServer(function (serverConn) {
+		server1 = serverConn
+		if (--toCreate === 0)
+			runTest()
+	})
+	s1.listen(9998, '127.0.0.1')
+
+	let s2 = createServer(function (serverConn) {
+		server2 = serverConn
+		if (--toCreate === 0)
+			runTest()
+	})
+	s2.listen(9999, '127.0.0.1')
+
+	client1 = connect(9998, '127.0.0.1', function () {
+		if (--toCreate === 0)
+			runTest()
+	})
+	client2 = connect(9999, '127.0.0.1', function () {
+		if (--toCreate === 0)
+			runTest()
+	})
+
+
+	const runTest = function () {
+		const serverEnd = new MovableStream(server1)
+		const clientEnd = new MovableStream(client1)
+
+		const api = {
+			hello: 'async',
+			foobar: 'async'
+		}
+
+		let client = muxrpc(api, null)()
+		let server = muxrpc(null, api)({
+			hello: function (name, cb) {
+				cb(null, 'hello, ' + name + '!')
+			},
+			foobar: function (arg, cb) {
+				process.nextTick(function () {
+					cb(null, arg + 1)
+				})
+			}
+		})
+
+		let a = client.createStream()
+		pull(a, clientEnd, a)
+		let b = server.createStream()
+		pull(b, serverEnd, b)
+
+		client.hello('world', function (err, value) {
+			if (err)
+				return t.fail('error')
+			t.equals(value, 'hello, world!', 'value correct before move')
+
+			serverEnd.moveto(server2)
+			clientEnd.moveto(client2)
+			clientEnd.on('moved', function () {
+				client.foobar(41, function (err, value) {
+					if (err)
+						return t.fail('error')
+					t.equals(value, 42, 'value correct after move')
+					clientEnd.abort()
+					serverEnd.abort()
+					s1.close()
+					s2.close()
+					t.end()
+				})
+			})
+		})
+	}
+})
+
+const wsClient = require('pull-ws/client')
+const wsServer = require('pull-ws/server')
+const SimplePeer = require('simple-peer')
+const wrtc = require('wrtc')
+const toPull = require('stream-to-pull-stream')
+
+test('switch with muxrpc from websocket to webrtc', function (t) {
+	let server1, client1
+
+	let toCreate = 4
+
+	let s1 = wsServer(function (serverConn) {
+		server1 = serverConn
+		if (--toCreate === 0)
+			runTest()
+	}).listen(9998)
+
+	client1 = wsClient('ws://localhost:9998', function () {
+		if (--toCreate === 0)
+			runTest()
+	})
+
+	let serverPeer = new SimplePeer({
+		initiator: false,
+		wrtc: wrtc
+	})
+	serverPeer.on('signal', function (data) {
+		clientPeer.signal(data)
+	})
+	serverPeer.on('connect', function () {
+		if (--toCreate === 0)
+			runTest()
+	})
+	let server2 = toPull.duplex(serverPeer)
+
+	let clientPeer = new SimplePeer({
+		initiator: true,
+		wrtc: wrtc
+	})
+	clientPeer.on('signal', function (data) {
+		serverPeer.signal(data)
+	})
+	clientPeer.on('connect', function () {
+		if (--toCreate === 0)
+			runTest()
+	})
+	let client2 = toPull.duplex(clientPeer)
+
+	const runTest = function () {
+		const serverEnd = new MovableStream(server1)
+		const clientEnd = new MovableStream(client1)
+
+		const api = {
+			hello: 'async',
+			foobar: 'async'
+		}
+
+		let client = muxrpc(api, null)()
+		let server = muxrpc(null, api)({
+			hello: function (name, cb) {
+				cb(null, 'hello, ' + name + '!')
+			},
+			foobar: function (arg, cb) {
+				process.nextTick(function () {
+					cb(null, arg + 1)
+				})
+			}
+		})
+
+		let a = client.createStream()
+		pull(a, clientEnd, a)
+		let b = server.createStream()
+		pull(b, serverEnd, b)
+
+		client.hello('world', function (err, value) {
+			if (err)
+				return t.fail('error')
+			t.equals(value, 'hello, world!', 'value correct before move')
+
+			serverEnd.moveto(server2)
+			clientEnd.moveto(client2)
+			clientEnd.on('moved', function () {
+				client.foobar(41, function (err, value) {
+					if (err)
+						return t.fail('error')
+					t.equals(value, 42, 'value correct after move')
+					clientEnd.abort()
+					serverEnd.abort()
+					s1.close()
+					t.end()
+				})
+			})
+		})
+	}
+})
+
+test('switch with muxrpc from muxrpc over websocket (nested) to webrtc', function (t) {
+	let server1, client1, rawServerConn, rawClientConn, rawServerHandle, rawClientHandle
+
+	let toCreate = 4
+
+	const outerApi = {
+		sss: 'duplex'
+	}
+
+	let s1 = wsServer(function (serverConn) {
+		rawServerConn = serverConn
+		rawServerHandle = muxrpc(null, outerApi)({
+			sss: function () {
+				console.log('got sss')
+				let loopback = DuplexPair()
+				server1 = loopback[0]
+				if (--toCreate === 0)
+					runTest()
+				return loopback[1]
+			}
+		})
+
+		let a = rawServerHandle.createStream()
+		pull(a, rawServerConn, a)
+
+	}).listen(9998)
+
+	rawClientConn = wsClient('ws://localhost:9998', function () {
+		rawClientHandle = muxrpc(outerApi, null)()
+		let b = rawClientHandle.createStream()
+		pull(b, rawClientConn, b)
+		console.log('calling sss')
+		client1 = rawClientHandle.sss()
+		if (--toCreate === 0)
+			runTest()
+	})
+
+	let serverPeer = new SimplePeer({
+		initiator: false,
+		wrtc: wrtc
+	})
+	serverPeer.on('signal', function (data) {
+		clientPeer.signal(data)
+	})
+	serverPeer.on('connect', function () {
+		if (--toCreate === 0)
+			runTest()
+	})
+	let server2 = toPull.duplex(serverPeer)
+
+	let clientPeer = new SimplePeer({
+		initiator: true,
+		wrtc: wrtc
+	})
+	clientPeer.on('signal', function (data) {
+		serverPeer.signal(data)
+	})
+	clientPeer.on('connect', function () {
+		if (--toCreate === 0)
+			runTest()
+	})
+	let client2 = toPull.duplex(clientPeer)
+
+	const runTest = function () {
+		const serverEnd = new MovableStream(server1)
+		const clientEnd = new MovableStream(client1)
+
+		const api = {
+			hello: 'async',
+			foobar: 'async'
+		}
+
+		let client = muxrpc(api, null)()
+		let server = muxrpc(null, api)({
+			hello: function (name, cb) {
+				cb(null, 'hello, ' + name + '!')
+			},
+			foobar: function (arg, cb) {
+				process.nextTick(function () {
+					cb(null, arg + 1)
+				})
+			}
+		})
+
+		let a = client.createStream()
+		pull(a, clientEnd, a)
+		let b = server.createStream()
+		pull(b, serverEnd, b)
+
+		client.hello('world', function (err, value) {
+			if (err)
+				return t.fail('error')
+			t.equals(value, 'hello, world!', 'value correct before move')
+
+			serverEnd.moveto(server2)
+			clientEnd.moveto(client2)
+			clientEnd.on('moved', function () {
+				client.foobar(41, function (err, value) {
+					if (err) {
+						console.log(err)
+						return t.fail('error')
+					}
+					t.equals(value, 42, 'value correct after move')
+					clientEnd.abort()
+					serverEnd.abort()
+					s1.close()
+					t.end()
+				})
+			})
+		})
+	}
+})
