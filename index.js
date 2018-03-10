@@ -9,7 +9,7 @@ const extractor = require('./lib/extractor')
 const REPLACE_WRITE = 0
 const REPLACE_READ = 1
 
-const MovableStream = module.exports = function (initialStream) {
+const MovableStream = module.exports = function (initialStream, name) {
 	if (!(this instanceof MovableStream)) return new MovableStream(initialStream)
 	let self = this
 
@@ -20,7 +20,7 @@ const MovableStream = module.exports = function (initialStream) {
 	self._gotReplaceWrite = false
 	self._aborted = false
 
-	self.sink = injector(initialStream.sink)
+	self.sink = injector(initialStream.sink, name)
 	self.source = extractor(initialStream.source, function (buf) {
 		if (buf.length !== 1) {
 			throw new Error('invalid sidechannel message length')
@@ -33,7 +33,9 @@ const MovableStream = module.exports = function (initialStream) {
 				}
 				let newStream = self._newStream
 				self._newStream = null
-				self.emit('moved', newStream) // TODO: not really quite the right time?
+				process.nextTick(function () {
+					self.emit('moved', newStream)
+				})
 				return newStream.source
 
 			case REPLACE_WRITE:
@@ -44,7 +46,7 @@ const MovableStream = module.exports = function (initialStream) {
 			default:
 				throw new Error('invalid sidechannel message')
 		}
-	})
+	}, name)
 
 	// self.source.on('abort', self.abort.bind(self))
 }
