@@ -423,8 +423,6 @@ test('switch with muxrpc from muxrpc over websocket (nested) to webrtc', functio
 			if (err)
 				return t.fail('error')
 			t.equals(value, 'hello, world!', 'value correct before move')
-			// global.startMagic = {}
-			// global.startMagic2 = true
 
 			function endOfTest() {
 				console.log('moved EMITTED')
