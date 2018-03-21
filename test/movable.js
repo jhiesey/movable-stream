@@ -319,10 +319,8 @@ test.skip('switch with muxrpc from websocket to webrtc', function (t) {
 	}
 })
 
-test('switch with muxrpc from muxrpc over websocket (nested) to webrtc', function (t) {
+test('switch with muxrpc from muxrpc over loopback (nested) to loopback', function (t) {
 	let server1, client1, rawServerConn, rawClientConn, rawServerHandle, rawClientHandle
-
-	// let toCreate = 4
 
 	const outerApi = {
 		sss: 'duplex'
@@ -332,66 +330,28 @@ test('switch with muxrpc from muxrpc over websocket (nested) to webrtc', functio
 	rawServerConn = barbaz[0]
 	rawClientConn = barbaz[1]
 
-	// let s1 = wsServer(function (serverConn) {
-	// 	rawServerConn = serverConn
-		rawServerHandle = muxrpc(null, outerApi)({
-			sss: function () {
-				console.log('got sss')
-				let loopback = DuplexPair()
-				server1 = loopback[0]
-				// console.log('here', toCreate)
-				// if (--toCreate === 0)
-				process.nextTick(runTest)
-					// runTest()
-				return loopback[1]
-			}
-		})
+	rawServerHandle = muxrpc(null, outerApi)({
+		sss: function () {
+			console.log('got sss')
+			let loopback = DuplexPair()
+			server1 = loopback[0]
+			process.nextTick(runTest)
+			return loopback[1]
+		}
+	})
 
-		let a = rawServerHandle.createStream()
-		pull(a, rawServerConn, a)
+	let a = rawServerHandle.createStream()
+	pull(a, rawServerConn, a)
 
-	// }).listen(9998)
-
-	// rawClientConn = wsClient('ws://localhost:9998', function () {
-		rawClientHandle = muxrpc(outerApi, null)()
-		let b = rawClientHandle.createStream()
-		pull(b, rawClientConn, b)
-		console.log('calling sss')
-		client1 = rawClientHandle.sss()
-		// if (--toCreate === 0)
-		// 	runTest()
-	// })
+	rawClientHandle = muxrpc(outerApi, null)()
+	let b = rawClientHandle.createStream()
+	pull(b, rawClientConn, b)
+	console.log('calling sss')
+	client1 = rawClientHandle.sss()
 
 	let foobar = DuplexPair()
 	let server2 = foobar[0]
 	let client2 = foobar[1]
-	// toCreate -= 2
-
-	// let serverPeer = new SimplePeer({
-	// 	initiator: false,
-	// 	wrtc: wrtc
-	// })
-	// serverPeer.on('signal', function (data) {
-	// 	clientPeer.signal(data)
-	// })
-	// serverPeer.on('connect', function () {
-	// 	if (--toCreate === 0)
-	// 		runTest()
-	// })
-	// let server2 = toPull.duplex(serverPeer)
-
-	// let clientPeer = new SimplePeer({
-	// 	initiator: true,
-	// 	wrtc: wrtc
-	// })
-	// clientPeer.on('signal', function (data) {
-	// 	serverPeer.signal(data)
-	// })
-	// clientPeer.on('connect', function () {
-	// 	if (--toCreate === 0)
-	// 		runTest()
-	// })
-	// let client2 = toPull.duplex(clientPeer)
 
 	function runTest () {
 		const serverEnd = new MovableStream(server1, 'server')
@@ -434,17 +394,129 @@ test('switch with muxrpc from muxrpc over websocket (nested) to webrtc', functio
 					t.equals(value, 42, 'value correct after move')
 					clientEnd.abort()
 					serverEnd.abort()
-					// s1.close()
 					t.end()
 				})
 			}
 
 			serverEnd.moveto(server2)
 			clientEnd.moveto(client2)
-			// clientEnd.on('moved', endOfTest)
-			clientEnd.on('moved', function () { process.nextTick(endOfTest) })
+			clientEnd.on('moved', function () {
+				process.nextTick(endOfTest)
+			})
+		})
+	}
+})
 
-			// process.nextTick(endOfTest)
+test('switch with muxrpc from muxrpc over websocket (nested) to webrtc', function (t) {
+	let server1, client1, rawServerConn, rawClientConn, rawServerHandle, rawClientHandle
+
+	let toCreate = 3
+
+	const outerApi = {
+		sss: 'duplex'
+	}
+
+	let s1 = wsServer(function (serverConn) {
+		rawServerConn = serverConn
+		rawServerHandle = muxrpc(null, outerApi)({
+			sss: function () {
+				console.log('got sss')
+				let loopback = DuplexPair()
+				server1 = loopback[0]
+				if (--toCreate === 0)
+					process.nextTick(runTest)
+				return loopback[1]
+			}
+		})
+
+		let a = rawServerHandle.createStream()
+		pull(a, rawServerConn, a)
+
+	}).listen(9998)
+
+	rawClientConn = wsClient('ws://localhost:9998', function () {
+		rawClientHandle = muxrpc(outerApi, null)()
+		let b = rawClientHandle.createStream()
+		pull(b, rawClientConn, b)
+		console.log('calling sss')
+		client1 = rawClientHandle.sss()
+	})
+
+	let serverPeer = new SimplePeer({
+		initiator: false,
+		wrtc: wrtc
+	})
+	serverPeer.on('signal', function (data) {
+		clientPeer.signal(data)
+	})
+	serverPeer.on('connect', function () {
+		if (--toCreate === 0)
+			runTest()
+	})
+	let server2 = toPull.duplex(serverPeer)
+
+	let clientPeer = new SimplePeer({
+		initiator: true,
+		wrtc: wrtc
+	})
+	clientPeer.on('signal', function (data) {
+		serverPeer.signal(data)
+	})
+	clientPeer.on('connect', function () {
+		if (--toCreate === 0)
+			runTest()
+	})
+	let client2 = toPull.duplex(clientPeer)
+
+	function runTest () {
+		const serverEnd = new MovableStream(server1, 'server')
+		const clientEnd = new MovableStream(client1, 'client')
+
+		const api = {
+			hello: 'async',
+			foobar: 'async'
+		}
+
+		let client = muxrpc(api, null)()
+		let server = muxrpc(null, api)({
+			hello: function (name, cb) {
+				cb(null, 'hello, ' + name + '!')
+			},
+			foobar: function (arg, cb) {
+				process.nextTick(function () {
+					cb(null, arg + 1)
+				})
+			}
+		})
+
+		let a = client.createStream()
+		pull(a, clientEnd, a)
+		let b = server.createStream()
+		pull(b, serverEnd, b)
+
+		client.hello('world', function (err, value) {
+			if (err)
+				return t.fail('error')
+			t.equals(value, 'hello, world!', 'value correct before move')
+
+			function endOfTest() {
+				console.log('moved EMITTED')
+				client.foobar(41, function (err, value) {
+					if (err) {
+						console.log(err)
+						return t.fail('error')
+					}
+					t.equals(value, 42, 'value correct after move')
+					clientEnd.abort()
+					serverEnd.abort()
+					s1.close()
+					t.end()
+				})
+			}
+
+			serverEnd.moveto(server2)
+			clientEnd.moveto(client2)
+			clientEnd.on('moved', function () { process.nextTick(endOfTest) })
 		})
 	}
 })
